@@ -1,0 +1,3 @@
+-- Superseded: the schema now lives in packages/db/prisma/schema.prisma and
+-- migrations in packages/db/prisma/migrations. This file is kept empty on purpose
+-- and is no longer run. You can delete the apps/api/migrations folder.

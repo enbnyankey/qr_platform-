@@ -1,0 +1,23 @@
+{
+  "name": "@qr/db",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "scripts": {
+    "prisma": "node scripts/prisma.js",
+    "generate": "node scripts/prisma.js generate",
+    "migrate:dev": "node scripts/prisma.js migrate dev",
+    "migrate:deploy": "node scripts/prisma.js migrate deploy",
+    "migrate:reset": "node scripts/prisma.js migrate reset --force",
+    "studio": "node scripts/prisma.js studio",
+    "postinstall": "node scripts/prisma.js generate"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "dotenv": "^16.4.7"
+  },
+  "devDependencies": {
+    "prisma": "6.19.3"
+  }
+}

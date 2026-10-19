@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+/* Design tokens — same family as the architecture page: green-biased ink neutrals, one teal accent. */
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-canvas: #f5f7f6;
+  --color-surface: #ffffff;
+  --color-sunk: #eef2f0;
+  --color-line: #d7dfdb;
+  --color-ink: #14201b;
+  --color-muted: #5a6b64;
+  --color-faint: #8a9993;
+  --color-accent: #0d6b5c;
+  --color-accent-hover: #0a5649;
+  --color-accent-soft: #dcefe9;
+  --color-good: #1f7a3f;
+  --color-good-soft: #dff1e5;
+  --color-warn: #9a5a0c;
+  --color-warn-soft: #f7ead6;
+  --color-bad: #b42318;
+  --color-bad-soft: #fbe4e1;
+}
+
+html, body { background: var(--color-canvas); color: var(--color-ink); }
+body { font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; letter-spacing: -0.01em; }
+.tabular { font-variant-numeric: tabular-nums; }
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

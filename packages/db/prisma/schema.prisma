@@ -1,0 +1,480 @@
+// QR Platform database schema (Phase 1).
+// Conventions:
+//   * every tenant-owned table has orgId, and branchId (nullable) is ready for Phase 5
+//   * money is stored in minor units (pesewas) as BigInt with a currency code
+//   * Postgres column names are snake_case (@map), Prisma fields are camelCase
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Enums ----------
+
+enum UserStatus {
+  active
+  suspended
+}
+
+enum OrgStatus {
+  active
+  suspended
+}
+
+enum Role {
+  business_owner
+  manager
+  cashier
+  kitchen
+  scanner
+  accountant
+  support
+}
+
+enum OtpPurpose {
+  verify_email
+  reset_password
+}
+
+enum QrType {
+  url
+  social
+  document
+  contact
+  location
+  menu
+  text
+  event
+}
+
+enum QrStatus {
+  active
+  inactive
+  suspended
+}
+
+enum ScanOutcome {
+  redirected
+  served
+  blocked_inactive
+  blocked_expired
+  blocked_suspended
+  blocked_plan // paused because the business's plan lapsed or hit its scan limit
+}
+
+// ---------- Identity ----------
+
+model User {
+  id              String       @id @default(uuid()) @db.Uuid
+  email           String       @unique // always stored lowercase
+  phone           String?
+  fullName        String       @map("full_name")
+  passwordHash    String       @map("password_hash")
+  emailVerifiedAt DateTime?    @map("email_verified_at") @db.Timestamptz(6)
+  isSuperAdmin    Boolean      @default(false) @map("is_super_admin")
+  status          UserStatus   @default(active)
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  otpCodes        OtpCode[]
+  memberships     Membership[]
+  orgsCreated     Organization[] @relation("OrgCreatedBy")
+  qrCreated       QrCode[]       @relation("QrCreatedBy")
+  qrChanges       QrDestinationHistory[]
+
+  @@map("users")
+}
+
+/// One-time codes for email verification and password reset (stored hashed).
+model OtpCode {
+  id        String     @id @default(uuid()) @db.Uuid
+  userId    String     @map("user_id") @db.Uuid
+  purpose   OtpPurpose
+  codeHash  String     @map("code_hash")
+  attempts  Int        @default(0)
+  expiresAt DateTime   @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime?  @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose, createdAt(sort: Desc)])
+  @@map("otp_codes")
+}
+
+// ---------- Tenancy ----------
+
+model Organization {
+  id           String    @id @default(uuid()) @db.Uuid
+  name         String
+  slug         String    @unique
+  businessType String?   @map("business_type")
+  email        String?
+  phone        String?
+  address      String?
+  country      String    @default("GH") @db.Char(2)
+  currency     String    @default("GHS") @db.Char(3)
+  taxRateBps   Int       @default(0) @map("tax_rate_bps") // basis points: 1250 = 12.5%
+  brandColor   String    @default("#0d6b5c") @map("brand_color")
+  logoUrl      String?   @map("logo_url")
+  status       OrgStatus @default(active)
+  createdById  String?   @map("created_by") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  createdBy    User?          @relation("OrgCreatedBy", fields: [createdById], references: [id])
+  branches     Branch[]
+  memberships  Membership[]
+  menus        Menu[]
+  menuSections MenuSection[]
+  menuItems    MenuItem[]
+  qrCodes      QrCode[]
+  events       Event[]
+  subscription Subscription?
+  payments     Payment[]
+
+  @@map("organizations")
+}
+
+/// Exists from day one so Phase 5 multi-branch needs no migration of tenant tables.
+model Branch {
+  id        String   @id @default(uuid()) @db.Uuid
+  orgId     String   @map("org_id") @db.Uuid
+  name      String
+  address   String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  memberships Membership[]
+  menus       Menu[]
+  qrCodes     QrCode[]
+
+  @@index([orgId])
+  @@map("branches")
+}
+
+/// Role per user per organization. Phase 1 uses business_owner; the others are reserved.
+model Membership {
+  userId    String   @map("user_id") @db.Uuid
+  orgId     String   @map("org_id") @db.Uuid
+  branchId  String?  @map("branch_id") @db.Uuid
+  role      Role
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user   User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  org    Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  branch Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  @@id([userId, orgId])
+  @@index([orgId])
+  @@map("memberships")
+}
+
+// ---------- Digital menus ----------
+
+model Menu {
+  id          String   @id @default(uuid()) @db.Uuid
+  orgId       String   @map("org_id") @db.Uuid
+  branchId    String?  @map("branch_id") @db.Uuid
+  name        String
+  description String?
+  isPublished Boolean  @default(false) @map("is_published")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  org      Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  branch   Branch?       @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  sections MenuSection[]
+  qrCodes  QrCode[]
+
+  @@index([orgId])
+  @@map("menus")
+}
+
+model MenuSection {
+  id          String   @id @default(uuid()) @db.Uuid
+  orgId       String   @map("org_id") @db.Uuid
+  menuId      String   @map("menu_id") @db.Uuid
+  name        String
+  description String?
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  menu  Menu         @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  items MenuItem[]
+
+  @@index([menuId, sortOrder])
+  @@map("menu_sections")
+}
+
+model MenuItem {
+  id          String   @id @default(uuid()) @db.Uuid
+  orgId       String   @map("org_id") @db.Uuid
+  sectionId   String   @map("section_id") @db.Uuid
+  name        String
+  description String?
+  priceMinor  BigInt   @map("price_minor")
+  currency    String   @db.Char(3)
+  imageUrl    String?  @map("image_url")
+  isAvailable Boolean  @default(true) @map("is_available")
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  org     Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  section MenuSection  @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+
+  @@index([sectionId, sortOrder])
+  @@map("menu_items")
+}
+
+// ---------- Event pages (weddings, funerals, ...) ----------
+
+enum EventKind {
+  wedding
+  funeral
+  birthday
+  church
+  corporate
+  other
+}
+
+/// A designed programme page guests open by scanning the event's QR code.
+model Event {
+  id          String    @id @default(uuid()) @db.Uuid
+  orgId       String    @map("org_id") @db.Uuid
+  kind        EventKind
+  title       String // dashboard name, e.g. "Ama & Kofi's wedding"
+  eventDate   DateTime? @map("event_date") @db.Date
+  /// Template id plus colour, font, ornament and photo choices
+  theme       Json      @default("{}")
+  /// Names, date, venue, welcome note and the ordered sections (programme, hymns, ...)
+  content     Json      @default("{}")
+  /// Wording and size of the printable QR card
+  card        Json      @default("{}")
+  isPublished Boolean   @default(false) @map("is_published")
+  createdById String?   @map("created_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  org     Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  qrCodes QrCode[]
+
+  @@index([orgId, createdAt(sort: Desc)])
+  @@map("events")
+}
+
+// ---------- QR codes ----------
+
+/// Every code is dynamic: the printed image encodes QR_BASE_URL/q/<code>; the destination lives here.
+model QrCode {
+  id          String    @id @default(uuid()) @db.Uuid
+  orgId       String    @map("org_id") @db.Uuid
+  branchId    String?   @map("branch_id") @db.Uuid
+  code        String    @unique // random base62, not sequential
+  name        String
+  type        QrType
+  payload     Json      @default("{}") // type-specific input as entered
+  targetUrl   String?   @map("target_url") // resolved redirect target (null for contact/text)
+  menuId      String?   @map("menu_id") @db.Uuid
+  eventId     String?   @map("event_id") @db.Uuid
+  style       Json      @default("{}") // fg, bg, margin, ecc, logo
+  status      QrStatus  @default(active)
+  expiresAt   DateTime? @map("expires_at") @db.Timestamptz(6)
+  createdById String?   @map("created_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  org       Organization           @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  branch    Branch?                @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  menu      Menu?                  @relation(fields: [menuId], references: [id], onDelete: SetNull)
+  event     Event?                 @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  createdBy User?                  @relation("QrCreatedBy", fields: [createdById], references: [id])
+  history   QrDestinationHistory[]
+  scans     ScanEvent[]
+
+  @@index([orgId, createdAt(sort: Desc)])
+  @@index([menuId])
+  @@index([eventId])
+  @@map("qr_codes")
+}
+
+/// History of destination changes (proves "update without reprinting" and supports audit).
+model QrDestinationHistory {
+  id          BigInt   @id @default(autoincrement())
+  qrId        String   @map("qr_id") @db.Uuid
+  type        QrType
+  payload     Json
+  targetUrl   String?  @map("target_url")
+  changedById String?  @map("changed_by") @db.Uuid
+  changedAt   DateTime @default(now()) @map("changed_at") @db.Timestamptz(6)
+
+  qr        QrCode @relation(fields: [qrId], references: [id], onDelete: Cascade)
+  changedBy User?  @relation(fields: [changedById], references: [id])
+
+  @@index([qrId, changedAt(sort: Desc)])
+  @@map("qr_destination_history")
+}
+
+/// Append-only scan log. No raw IPs: ipHash is a salted SHA-256.
+model ScanEvent {
+  id         BigInt      @id @default(autoincrement())
+  qrId       String      @map("qr_id") @db.Uuid
+  orgId      String      @map("org_id") @db.Uuid
+  scannedAt  DateTime    @default(now()) @map("scanned_at") @db.Timestamptz(6)
+  outcome    ScanOutcome
+  deviceType String?     @map("device_type")
+  os         String?
+  browser    String?
+  country    String?     @db.Char(2)
+  region     String?
+  city       String?
+  referer    String?
+  ipHash     String?     @map("ip_hash")
+
+  qr QrCode @relation(fields: [qrId], references: [id], onDelete: Cascade)
+
+  @@index([qrId, scannedAt(sort: Desc)])
+  @@index([orgId, scannedAt(sort: Desc)])
+  @@map("scan_events")
+}
+
+// ---------- Platform ----------
+
+/// Platform-wide settings managed by Super Admins (one row per key).
+model PlatformSetting {
+  key         String   @id
+  value       Json
+  updatedById String?  @map("updated_by") @db.Uuid
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("platform_settings")
+}
+
+model AuditLog {
+  id        BigInt   @id @default(autoincrement())
+  orgId     String?  @map("org_id") @db.Uuid
+  actorId   String?  @map("actor_id") @db.Uuid
+  action    String // e.g. qr.create, qr.destination_change, org.update
+  entity    String
+  entityId  String?  @map("entity_id")
+  before    Json?
+  after     Json?
+  ip        String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([orgId, createdAt(sort: Desc)])
+  @@map("audit_log")
+}
+
+// ---------- Billing ----------
+
+enum BillingInterval {
+  month
+  year
+}
+
+enum SubscriptionStatus {
+  trialing
+  active
+  expired
+}
+
+enum PaymentStatus {
+  pending
+  success
+  failed
+  abandoned
+}
+
+/// Sellable plans. Prices, limits and features are editable by Super Admins.
+model Plan {
+  code              String   @id // free | basic | pro
+  name              String
+  description       String?
+  currency          String   @default("GHS") @db.Char(3)
+  priceMonthlyMinor BigInt   @default(0) @map("price_monthly_minor")
+  priceYearlyMinor  BigInt   @default(0) @map("price_yearly_minor")
+  /// { maxQr, maxMenus, scansPerMonth, analyticsDays } — 0 means unlimited
+  limits            Json     @default("{}")
+  /// { logo, svgDownload, locationAnalytics, removeBranding }
+  features          Json     @default("{}")
+  isActive          Boolean  @default(true) @map("is_active")
+  sortOrder         Int      @default(0) @map("sort_order")
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  subscriptions Subscription[]
+  payments      Payment[]
+
+  @@map("plans")
+}
+
+/// One per organization. Paid time is prepaid: each successful payment extends currentPeriodEnd.
+model Subscription {
+  orgId            String             @id @map("org_id") @db.Uuid
+  planCode         String             @map("plan_code")
+  status           SubscriptionStatus
+  interval         BillingInterval?
+  trialEndsAt      DateTime?          @map("trial_ends_at") @db.Timestamptz(6)
+  currentPeriodEnd DateTime?          @map("current_period_end") @db.Timestamptz(6)
+  grantedById      String?            @map("granted_by") @db.Uuid // set when an admin gives a plan manually
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  plan Plan         @relation(fields: [planCode], references: [code])
+
+  @@map("subscriptions")
+}
+
+/// One checkout attempt. `reference` is ours and is what the provider sends back.
+model Payment {
+  id           String          @id @default(uuid()) @db.Uuid
+  orgId        String          @map("org_id") @db.Uuid
+  planCode     String          @map("plan_code")
+  interval     BillingInterval
+  amountMinor  BigInt          @map("amount_minor")
+  currency     String          @db.Char(3)
+  provider     String // paystack | hubtel | test
+  reference    String          @unique
+  providerRef  String?         @map("provider_ref")
+  status       PaymentStatus   @default(pending)
+  checkoutUrl  String?         @map("checkout_url")
+  channel      String? // mobile_money, card, ...
+  providerData Json?           @map("provider_data")
+  failureNote  String?         @map("failure_note")
+  periodStart  DateTime?       @map("period_start") @db.Timestamptz(6)
+  periodEnd    DateTime?       @map("period_end") @db.Timestamptz(6)
+  paidAt       DateTime?       @map("paid_at") @db.Timestamptz(6)
+  createdById  String?         @map("created_by") @db.Uuid
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  plan Plan         @relation(fields: [planCode], references: [code])
+
+  @@index([orgId, createdAt(sort: Desc)])
+  @@index([status, createdAt])
+  @@map("payments")
+}
+
+/// Every provider callback, stored raw before processing so nothing is lost.
+model PaymentWebhook {
+  id             BigInt    @id @default(autoincrement())
+  provider       String
+  reference      String?
+  event          String?
+  signatureValid Boolean?  @map("signature_valid")
+  payload        Json
+  receivedAt     DateTime  @default(now()) @map("received_at") @db.Timestamptz(6)
+  processedAt    DateTime? @map("processed_at") @db.Timestamptz(6)
+  error          String?
+
+  @@index([reference])
+  @@map("payment_webhooks")
+}

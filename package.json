@@ -1,0 +1,42 @@
+{
+  "name": "qr-platform",
+  "private": true,
+  "version": "0.1.0",
+  "ports": {
+    "web": 6060,
+    "api": 6061,
+    "resolver": 6062
+  },
+  "description": "QR-powered digital commerce platform — Phase 1 (Quick Wins)",
+  "workspaces": [
+    "packages/db",
+    "apps/api",
+    "apps/resolver",
+    "apps/web"
+  ],
+  "scripts": {
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "migrate": "npm run migrate:deploy -w packages/db",
+    "seed": "npm run seed -w apps/api",
+    "dev": "concurrently -n api,resolver,web -c cyan,magenta,green \"npm run dev -w apps/api\" \"npm run dev -w apps/resolver\" \"npm run dev -w apps/web\"",
+    "build": "npm run build -w apps/api && npm run build -w apps/resolver && npm run build -w apps/web",
+    "test": "npm test -w apps/api",
+    "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/resolver && npm run typecheck -w apps/web",
+    "db:migrate:dev": "npm run migrate:dev -w packages/db",
+    "db:reset": "npm run migrate:reset -w packages/db",
+    "db:studio": "npm run studio -w packages/db",
+    "db:generate": "npm run generate -w packages/db"
+  },
+  "devDependencies": {
+    "concurrently": "9.1.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "overrides": {
+    "postcss": "8.5.28",
+    "sharp": "0.35.5",
+    "deepmerge-ts": "8.0.2"
+  }
+}
